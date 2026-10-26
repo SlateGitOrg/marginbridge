@@ -1,140 +1,124 @@
 # marginbridge
 
-> A price-volume-mix bridge plus elasticity estimated against the confounder, so the pricing recommendation is not backwards.
+A price-volume-mix margin bridge, plus price elasticity estimated against the confounder, so the pricing recommendation does not come out backwards.
 
-`FLAGSHIP` · **Business Analyst** · Expert · ~5-6 weeks · Manufacturing - industrial distributor with negotiated pricing
+[![ci](https://github.com/SlateGitOrg/marginbridge/actions/workflows/ci.yml/badge.svg)](https://github.com/SlateGitOrg/marginbridge/actions/workflows/ci.yml)
 
-**Primary language:** SQL
-**Tags:** `pricing`, `dbt`, `sql`, `causal-inference`, `elasticity`, `dimensional-modelling`
+## Why
 
----
+In an industrial distributor, sales reps have discount authority, and "margin is down" is usually one number hiding several unrelated problems: genuine price erosion, a shift toward lower-margin product lines, and one region that discounts far harder than the rest. Each needs a different response. On top of that, discounts in observational sales data are not random: reps give them to accounts that are already shrinking. A naive regression of volume on price therefore picks up that confounder instead of the causal effect, and recommends price cuts to chase volume that was never price-driven.
 
-> **Implementation note.** The catalogue specifies **SQL** for this
-> project and that remains the target. This repository ships a runnable
-> **Python** reference implementation of the core differentiator so the
-> behaviour is executable and tested today; port it to SQL as step one
-> of your own build.
+marginbridge separates the three margin effects with a bridge that reconciles exactly, and estimates elasticity both naively and with the confounder controlled, on synthetic data where the true elasticity is known, so the estimator is scored rather than eyeballed.
 
-## The problem
+## Features
 
-Sales representatives have discount authority. Margin falls 2.3 points year on year and leadership blames market pressure. In reality it is a mixture of genuine price erosion, a shift toward lower-margin product lines, and one region discounting 40% more than anyone else - three completely different problems requiring three different responses, all invisible inside a single margin number.
+- Price / volume / mix bridge between two years, with explicit definitions for each component.
+- Exact reconciliation: components must sum to the total margin delta, and any residue is reported as its own `unexplained` component instead of being absorbed.
+- Segment-level elasticity, naive and corrected, each with a 95% confidence interval.
+- Discount by region, raw and re-weighted to the company-wide segment mix, to find policy outliers that are not just customer-mix artefacts.
+- Synthetic transaction generator with a chosen true elasticity per segment and a deliberately confounded discount mechanism.
+- Standard library only: a small OLS (normal equations, Gaussian elimination) is included, so there is nothing to install.
 
-## ⭐ The differentiator
+## Architecture
 
-A **price-volume-mix bridge decomposition** separates rate erosion from mix shift, combined with **elasticity estimated against the confounding**, not from a naive regression of volume on price. In observational sales data, discounts are *given to* customers who were going to buy less anyway - so a naive elasticity carries the sign of the confounder rather than the causal effect. A generic pricing analysis regresses units on price, reports an elasticity, and recommends a price cut that destroys margin.
-
-This is the sentence to lead with when someone asks you to walk through the
-project. Everything else in this repo exists to make it true and to prove it.
-
-## Data
-
-A documented synthetic generator with a **known true elasticity per segment** and a deliberately confounded discount-assignment mechanism, so the analysis can be scored against ground truth. Structure informed by publicly documented B2B distribution pricing patterns.
-
-> No paid API key is required to run or demo this project. Where a paid
-> service would add value it is wired as an optional enhancement behind an
-> interface with an offline mock as the default implementation.
-
-## Stack
-
-- PostgreSQL / DuckDB - the SQL is the primary artefact
-- dbt for the transformation layer, with tests
-- Python (statsmodels) for the elasticity estimation only
-- Streamlit for the policy simulator
-- dbt tests + pytest
-
-## Core capabilities
-
-- Dimensional model of transactions, price-waterfall components, and customer/product hierarchies
-- Price-volume-mix bridge with drill-down to segment, region and representative
-- Segment-level elasticity with the confounding addressed and confidence intervals reported
-- Policy simulator: propose a discount-authority matrix, see modelled margin and volume impact with uncertainty bands
-- Representative-level discount outlier detection that controls for customer mix
-
-## Repository layout
-
-```
-models/staging/
-models/marts/
-analysis/elasticity/
-sim/
-generator/
-app/
-tests/
+```mermaid
+flowchart LR
+  G["generator.py<br/>synthetic transactions<br/>known true elasticity"] --> T[("Txn list")]
+  T --> B["bridge.py<br/>price_volume_mix"]
+  T --> E["bridge.py<br/>estimate_elasticity<br/>naive vs corrected"]
+  T --> D["bridge.py<br/>discount_by_region<br/>mix-adjusted"]
+  E --> O["ols<br/>normal equations"]
+  B --> R["demo.py<br/>report"]
+  E --> R
+  D --> R
+  T2["tests/test_bridge.py"] -. "scores against ground truth" .-> E
+  T2 -. "asserts exact reconciliation" .-> B
 ```
 
-## Build plan
+`generator.py` produces two years of transactions across four product lines, three customer segments and four regions. `bridge.py` consumes them to build the bridge, fit the two elasticity models and compute the regional discount table. `demo.py` prints all three. More detail is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-1. Generator first, with a true elasticity you choose and a confounder you design. This is what makes the estimate scoreable.
-2. Dimensional model and the bridge. Get the bridge to sum exactly before trusting any component.
-3. Elasticity with the confounding handled - and show the naive estimate alongside it, because the contrast is the argument.
-4. Policy simulator last.
+## Quick start
 
-## Testing strategy
-
-Assert the recovered elasticity falls **within its stated confidence interval of the generator's true value** per segment. Assert the bridge components **sum exactly** to the total margin delta - a silent off-by-one in a bridge is the classic error that invalidates the whole analysis while looking completely reasonable.
-
-Tests assert **correctness**, not merely that the code runs. A green suite on
-this repo is a claim about behaviour under adversarial conditions; treat any
-test that would pass against a deliberately broken implementation as a bug in
-the test.
-
-## Quality & safety layer
-
-dbt tests enforce referential integrity and non-negative quantities on the fact table. Every elasticity estimate ships with its interval; the simulator refuses to display a point estimate without one.
-
-## Measurable outcome
-
-> The 2.3-point margin decline decomposes to 0.4 points price erosion, 1.6 points mix shift and 0.3 points discount policy - redirecting the response from a price increase to a product-mix intervention.
-
-State it in these terms — business units, not technical ones — in your CV
-bullet and in the first thirty seconds of describing the project.
-
-## Interview questions this project answers
-
-- **Why is a naive price-elasticity regression usually wrong sign?**
-- **Walk me through a price-volume-mix bridge.**
-- **Your bridge does not sum. What went wrong?**
-
-## What this deliberately is *not*
-
-- Not a price-optimisation engine. It diagnoses first, because optimising the wrong quantity is how margin is lost.
-- Not a causal-inference paper - it uses the minimum rigour needed to avoid a backwards answer.
-
-
-## Run it now
+Requires Python 3.11+. No dependencies.
 
 ```bash
-python -m unittest discover -s tests -v   # the suite
-python -m src.demo                        # the 60-second artefact
-```
-
-Requires Python 3.11+. The runnable core uses **only the standard
-library** (including `sqlite3`), so there is nothing to install.
-
-## Getting started
-
-```bash
-git clone <your-fork-url> marginbridge
+git clone https://github.com/SlateGitOrg/marginbridge.git
 cd marginbridge
-pip install -e .
-python -m generator --months 24
-dbt build
-python -m analysis.elasticity --compare-naive
-streamlit run app/main.py
-pytest && dbt test
+python -m unittest discover -s tests -v   # run the test suite
+python -m src.demo                        # print the bridge, elasticity and regional report
 ```
 
-Docker is supported but optional — every path above works on a plain
-Windows/macOS/Linux laptop without a cloud account.
+## Example
 
-## Definition of done
+Output of `python -m src.demo` (trimmed, seed `20260911`):
 
-- [ ] The differentiator above is implemented, and a test proves it
-- [ ] The measurable outcome is produced by a command anyone can run
-- [ ] `README` explains the one decision a generic version gets wrong
-- [ ] CI runs the full suite on every push and is green on `main`
-- [ ] A recruiter can see the headline artefact in under 60 seconds
+```text
+  6,231 transaction lines across two years.
+  Gross margin rate: 21.4% -> 20.8%  (-0.7 points)
 
-## Licence
+  THE BRIDGE
+    2025 margin           3,702,324
+      volume                341,470
+      mix                  -275,020
+      price                 -37,935
+    2026 margin           3,730,840
+    reconciles:      True
+
+  segment                true    naive        naive 95% CI  corrected    corrected 95% CI
+  national_account      -1.80    -0.02       [-0.05, 0.01]      -1.96      [-2.55, -1.36]
+  regional              -1.10    -0.01       [-0.04, 0.01]      -0.64      [-1.17, -0.11]
+  trade_counter         -0.40    -0.01       [-0.04, 0.02]       0.02       [-0.61, 0.65]
+
+  region          raw   mix-adjusted    lines
+  west          13.6%          13.7%    1,491
+  north          8.0%           8.0%    1,542
+```
+
+Total margin grew while the margin rate fell: volume growth is masking a mix-shift headwind (88% of it) and a smaller price-erosion headwind (12%). The naive elasticity is near zero in every segment and its interval excludes the true value each time. The corrected intervals cover the truth in every segment and are honestly wide for the nearly inelastic `trade_counter` segment. The `west` region discounts hardest even after adjusting for customer mix.
+
+## How it works
+
+**Bridge.** Per product line and year, units, revenue and cost are aggregated. Then:
+
+- *volume*: change in total units, holding base-year mix and base-year per-unit margin.
+- *mix*: change in each line's share of units, at base-year per-unit margin, applied to final-year units.
+- *price*: change in per-unit margin, applied to final-year units and mix.
+
+The three sum to the margin delta; a tolerance of 1e-6 decides `reconciles`.
+
+**Elasticity.** The naive model is `log(units) ~ log(net_price)`. The corrected model regresses `log(units)` on `log(net_price / list_price)`, the account's prior demand trend (the observable proxy for the confounder) and product-line dummies, because base volumes differ by orders of magnitude across lines and omitting them would load that variation onto price.
+
+**Regional discounts.** Each region's mean discount is recomputed as a weighted average of its per-segment means, using the company-wide segment mix as weights.
+
+**Trade-offs.** Controlling for prior trend only works because the generator exposes it; with real data it must come from prior-period volumes. OLS standard errors assume homoscedastic residuals.
+
+## Testing
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+17 tests cover: exact bridge reconciliation, surfacing of residuals, a zero bridge over identical years, the corrected interval covering the true elasticity per segment, the naive interval excluding it, OLS recovering known relationships and rejecting singular designs, and detection of the planted heavy-discount region. CI runs the same command on Python 3.12.
+
+## Project layout
+
+```
+src/
+  generator.py   synthetic transactions with known elasticity and confounded discounts
+  bridge.py      OLS, elasticity estimation, price-volume-mix bridge, regional discounts
+  demo.py        end-to-end report
+tests/
+  test_bridge.py
+docs/
+  ARCHITECTURE.md
+```
+
+## Limitations
+
+- All data is synthetic; the estimates are validated against the generator's ground truth, not real sales.
+- This is a diagnostic tool, not a price-optimisation engine, and not a full causal-inference framework: it uses the minimum rigour needed to avoid a backwards answer.
+- Bridge definitions are one reasonable convention; other organisations define price, volume and mix differently.
+
+## License
 
 MIT — see [LICENSE](LICENSE).

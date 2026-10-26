@@ -1,6 +1,6 @@
 """The price-volume-mix bridge, and the elasticity estimate.
 
-THE DIFFERENTIATOR LIVES HERE (twice).
+This module does two things.
 
 1. THE BRIDGE. "Margin fell 2.3 points" is one number covering three unrelated
    problems with three different responses: price erosion, mix shift toward
